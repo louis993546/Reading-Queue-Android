@@ -3,23 +3,48 @@ package com.louis993546.readingqueue
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
-import androidx.compose.material.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.BottomNavigation
+import androidx.compose.material.BottomNavigationItem
+import androidx.compose.material.DropdownMenu
+import androidx.compose.material.DropdownMenuItem
+import androidx.compose.material.Icon
+import androidx.compose.material.IconButton
+import androidx.compose.material.MaterialTheme
+import androidx.compose.material.Scaffold
+import androidx.compose.material.Text
+import androidx.compose.material.TextField
+import androidx.compose.material.TopAppBar
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Feed
 import androidx.compose.material.icons.filled.Inbox
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Feed
 import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -30,6 +55,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import coil.compose.AsyncImage
 import com.louis993546.readingqueue.ui.theme.ReadingQueueTheme
 
 class MainActivity : ComponentActivity() {
@@ -43,21 +69,63 @@ class MainActivity : ComponentActivity() {
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
-                    bottomBar = { ReadingQueueBottomBarContainer(currentDestination, navController) }
+                    bottomBar = {
+                        ReadingQueueBottomBarContainer(
+                            currentDestination,
+                            navController
+                        )
+                    }
                 ) { paddingValues ->
                     NavHost(
                         navController = navController,
-                        startDestination = ReadingQueueTab.Feed.label,
+                        startDestination = Screen.FeedList.name,
                         modifier = Modifier.padding(paddingValues)
                     ) {
+                        composable(Screen.FeedList.name) {
+                            FeedListScreen { navController.navigate(ReadingQueueTab.Feed.label) }
+                        }
                         composable(ReadingQueueTab.Feed.label) { FeedScreen() }
                         composable(ReadingQueueTab.Queue.label) { QueueScreen() }
+                        composable(ReadingQueueTab.Search.label) { SearchScreen() }
                         composable(ReadingQueueTab.Favorite.label) { FavoriteScreen() }
                         composable(ReadingQueueTab.Settings.label) { SettingsScreen() }
                     }
                 }
+
+                LaunchedEffect("on start") {
+                    navController.navigate(ReadingQueueTab.Feed.label)
+                }
             }
         }
+    }
+}
+
+@Composable
+fun SearchScreen(
+    modifier: Modifier = Modifier,
+) {
+    var searchInput by remember { mutableStateOf("") }
+
+    Column(modifier = modifier) {
+        TextField(
+            value = searchInput,
+            onValueChange = { searchInput = it },
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            shape = MaterialTheme.shapes.large,
+        )
+    }
+}
+
+@Composable
+fun FeedListScreen(
+    modifier: Modifier = Modifier,
+    onClick: (String) -> Unit,
+) {
+    Column(modifier = modifier) {
+        Text("Feed 1", modifier = Modifier.clickable { onClick("feed 1") })
+        Text("Feed 2", modifier = Modifier.clickable { onClick("feed 2") })
+        Text("Feed 3", modifier = Modifier.clickable { onClick("feed 3") })
+        Text("Feed 4", modifier = Modifier.clickable { onClick("feed 4") })
     }
 }
 
@@ -66,7 +134,35 @@ fun FeedScreen(
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier) {
-        PhotoCard(modifier = Modifier.padding(16.dp))
+        var showMenu by remember { mutableStateOf(false) }
+
+        TopAppBar(
+            title = { Text("Feed") },
+            actions = {
+                IconButton(onClick = { showMenu = !showMenu }) {
+                    Icon(
+                        imageVector = Icons.Default.MoreVert,
+                        contentDescription = "More option"
+                    )
+                }
+                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenuItem(onClick = { /*TODO*/ }) {
+                        Text("Change Layout")
+                    }
+                    DropdownMenuItem(onClick = { /*TODO*/ }) {
+                        Text("Change Sorting")
+                    }
+                }
+            },
+        )
+        LazyColumn(
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            repeat(6) {
+                item { PhotoCard() }
+            }
+        }
     }
 }
 
@@ -124,12 +220,16 @@ fun PhotoCard(
     modifier: Modifier = Modifier,
 ) {
     Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .aspectRatio(1.5f)
-            .clip(MaterialTheme.shapes.medium)
-            .background(Color.Red)
+        modifier = modifier.shadow(elevation = 4.dp)
     ) {
+        AsyncImage(
+            model = "https://images.unsplash.com/photo-1609054367623-4fd42d7ade3b?ixlib=rb-1.2.1&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=2075&q=80",
+            contentDescription = "TODO",
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1.5f)
+                .clip(MaterialTheme.shapes.medium)
+        )
         Text("testing", modifier = Modifier.padding(8.dp))
     }
 }
@@ -187,7 +287,12 @@ enum class ReadingQueueTab(
 ) {
     Feed("Feed", Icons.Outlined.Feed, Icons.Filled.Feed),
     Queue("Queue", Icons.Outlined.Inbox, Icons.Filled.Inbox),
+    Search("Search", Icons.Outlined.Search, Icons.Filled.Search),
     Favorite("Favorite", Icons.Outlined.FavoriteBorder, Icons.Filled.Favorite),
     Settings("Settings", Icons.Outlined.Settings, Icons.Filled.Settings)
+}
+
+enum class Screen {
+    FeedList
 }
 
