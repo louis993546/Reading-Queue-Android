@@ -1,5 +1,6 @@
 package com.louis993546.readingqueue
 
+
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.BottomNavigation
 import androidx.compose.material.BottomNavigationItem
 import androidx.compose.material.DropdownMenu
@@ -38,9 +40,11 @@ import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,10 +59,32 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.room.Room
 import coil.compose.AsyncImage
 import com.louis993546.readingqueue.ui.theme.ReadingQueueTheme
+import it.skrape.core.htmlDocument
+import it.skrape.fetcher.AsyncFetcher
+import it.skrape.fetcher.response
+import it.skrape.fetcher.skrape
+import it.skrape.selects.DocElement
+import it.skrape.selects.html5.head
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import timber.log.Timber
 
 class MainActivity : ComponentActivity() {
+    val db: AppDatabase by lazy {
+        Room.databaseBuilder(
+            /* context = */ applicationContext,
+            /* klass = */ AppDatabase::class.java,
+            /* name = */ "reading-queue"
+        ).build()
+    }
+
+    val repo: ContentRepository by lazy {
+        ContentRepository(db.contentDao())
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -66,6 +92,12 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                 val currentDestination = navBackStackEntry?.destination
+
+                val coroutineScope = rememberCoroutineScope()
+
+                val content by repo
+                    .getAll()
+                    .collectAsState(emptyList())
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
@@ -84,7 +116,13 @@ class MainActivity : ComponentActivity() {
                         composable(Screen.FeedList.name) {
                             FeedListScreen { navController.navigate(ReadingQueueTab.Feed.label) }
                         }
-                        composable(ReadingQueueTab.Feed.label) { FeedScreen() }
+                        composable(ReadingQueueTab.Feed.label) {
+                            FeedScreen(content = content) {
+                                coroutineScope.launch(Dispatchers.IO) {
+                                    parse()
+                                }
+                            }
+                        }
                         composable(ReadingQueueTab.Queue.label) { QueueScreen() }
                         composable(ReadingQueueTab.Search.label) { SearchScreen() }
                         composable(ReadingQueueTab.Favorite.label) { FavoriteScreen() }
@@ -98,6 +136,64 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    private suspend fun parse() {
+        skrape(AsyncFetcher) {
+            request {
+//                url = "https://www.theverge.com/2022/4/5/23011377/germany-servers-russian-darknet-site-hydra-bitcoin"
+//                url = "https://www.engadget.com/nikon-z-9-mirrorless-camera-review-143006924.html"
+//                url = "https://www.youtube.com/watch?v=edNQeb0JDlk"
+//                url = "https://stackoverflow.com/questions/16102226/link-from-html-href-to-native-app"
+//                url = "https://en.wikipedia.org/wiki/RSS"
+//                url = "https://github.com/skrapeit/skrape.it"
+//                url = "https://beta.nebula.app/videos/wendover-the-incredible-logistics-behind-corn-farming" // somehow it gets nothing?
+                url = "https://twitter.com/MILFWEEED/status/1510967445619712001"
+            }
+            response {
+                htmlDocument {
+                    Timber.tag("qqq article title").d(titleText)
+                    head {
+                        val properties = findAll("meta")
+                            .filter { doc -> doc.hasAttribute("property") }
+
+                        properties.forEach {
+                            Timber.tag("qqqq").d(it.toString())
+                        }
+
+                        // based on open graph https://ogp.me/
+                        val imageUrl = properties.findProperty("og:image")
+                        val imageAlt = properties.findProperty("og:image:alt")
+                        val author = properties.findProperty("article:author")
+                        val description = properties.findProperty("og:description")
+                        val siteName = properties.findProperty("og:site_name")
+                        val title = properties.findProperty("og:title")
+                        val type = properties.findProperty("og:type")
+                        val publishTime = properties.findProperty("article:published_time")
+                        val modifiedTime = properties.findProperty("article:modified_time")
+
+                        Timber.tag("qqq").d("""
+                            title: $title
+                            description: $description
+                            author: $author
+                            site name: $siteName
+                            type: $type
+                            image: $imageUrl
+                            imageAlt: $imageAlt
+                            publish time: $publishTime
+                            modified time: $modifiedTime
+                        """.trimIndent())
+                    }
+                }
+            }
+        }
+    }
+
+    // TODO maybe add one to support array for images? https://ogp.me/#array
+    private fun List<DocElement>.findProperty(
+        of: String,
+        attributeKey: String = "content"
+    ): String? = firstOrNull { it.attribute("property") == of }
+        ?.attribute(attributeKey)
 }
 
 @Composable
@@ -110,7 +206,9 @@ fun SearchScreen(
         TextField(
             value = searchInput,
             onValueChange = { searchInput = it },
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
             shape = MaterialTheme.shapes.large,
         )
     }
@@ -132,6 +230,8 @@ fun FeedListScreen(
 @Composable
 fun FeedScreen(
     modifier: Modifier = Modifier,
+    content: List<Content>,
+    onClick: () -> Unit,
 ) {
     Column(modifier = modifier) {
         var showMenu by remember { mutableStateOf(false) }
@@ -152,6 +252,9 @@ fun FeedScreen(
                     DropdownMenuItem(onClick = { /*TODO*/ }) {
                         Text("Change Sorting")
                     }
+                    DropdownMenuItem(onClick = onClick) {
+                        Text("Test")
+                    }
                 }
             },
         )
@@ -159,8 +262,11 @@ fun FeedScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            repeat(6) {
-                item { PhotoCard() }
+//            content.forEach {
+//                PhotoCard(it)
+//            }
+            items(content, key = { it.id }) {
+                PhotoCard(text = it.title)
             }
         }
     }
@@ -218,6 +324,7 @@ fun SettingsScreen(
 @Composable
 fun PhotoCard(
     modifier: Modifier = Modifier,
+    text: String,
 ) {
     Box(
         modifier = modifier.shadow(elevation = 4.dp)
@@ -230,7 +337,7 @@ fun PhotoCard(
                 .aspectRatio(1.5f)
                 .clip(MaterialTheme.shapes.medium)
         )
-        Text("testing", modifier = Modifier.padding(8.dp))
+        Text(text, modifier = Modifier.padding(8.dp))
     }
 }
 
@@ -295,4 +402,3 @@ enum class ReadingQueueTab(
 enum class Screen {
     FeedList
 }
-
