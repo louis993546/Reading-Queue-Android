@@ -1,6 +1,8 @@
 package com.louis993546.readingqueue
 
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -123,14 +125,20 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         composable(ReadingQueueTab.Feed.label) {
-                            FeedScreen(contentRepo = contentRepo) {
-                                coroutineScope.launch(Dispatchers.IO) {
-                                    parse()
-                                }
-                            }
+                            FeedScreen(
+                                contentRepo = contentRepo,
+                                onDropdownClick = {
+                                    coroutineScope.launch(Dispatchers.IO) {
+                                        parse()
+                                    }
+                                },
+                                onClick = { openBrowser(it.id) }
+                            )
                         }
                         composable(ReadingQueueTab.Queue.label) {
-                            QueueScreen(contentRepo = contentRepo)
+                            QueueScreen(contentRepo = contentRepo) {
+                                openBrowser(it.id)
+                            }
                         }
                         composable(ReadingQueueTab.Search.label) { SearchScreen() }
                         composable(ReadingQueueTab.Favorite.label) { FavoriteScreen() }
@@ -143,6 +151,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun openBrowser(link: String) {
+        val i = Intent(Intent.ACTION_VIEW)
+        i.data = Uri.parse(link)
+        startActivity(i)
     }
 
     private fun setupWorkManager() {
@@ -197,7 +211,8 @@ class MainActivity : ComponentActivity() {
                         val publishTime = properties.findProperty("article:published_time")
                         val modifiedTime = properties.findProperty("article:modified_time")
 
-                        Timber.tag("qqq").d("""
+                        Timber.tag("qqq").d(
+                            """
                             title: $title
                             description: $description
                             author: $author
@@ -207,7 +222,8 @@ class MainActivity : ComponentActivity() {
                             imageAlt: $imageAlt
                             publish time: $publishTime
                             modified time: $modifiedTime
-                        """.trimIndent())
+                        """.trimIndent()
+                        )
                     }
                 }
             }
@@ -242,8 +258,8 @@ fun SearchScreen(
 }
 
 sealed class FeedListScreenState {
-    object Loading: FeedListScreenState()
-    data class Loaded(val feeds: List<RssFeed>): FeedListScreenState()
+    object Loading : FeedListScreenState()
+    data class Loaded(val feeds: List<RssFeed>) : FeedListScreenState()
 }
 
 @Composable
@@ -273,7 +289,8 @@ fun FeedListScreen(
 fun FeedScreen(
     modifier: Modifier = Modifier,
     contentRepo: ContentRepository,
-    onClick: () -> Unit,
+    onDropdownClick: () -> Unit,
+    onClick: (Content) -> Unit,
 ) {
     val content by contentRepo
         .getAll()
@@ -298,20 +315,21 @@ fun FeedScreen(
                     DropdownMenuItem(onClick = { /*TODO*/ }) {
                         Text("Change Sorting")
                     }
-                    DropdownMenuItem(onClick = onClick) {
+                    DropdownMenuItem(onClick = onDropdownClick) {
                         Text("Test")
                     }
                 }
             },
         )
-        ContentList(content = content)
+        ContentList(content = content, onClick = onClick)
     }
 }
 
 @Composable
 fun ContentList(
     modifier: Modifier = Modifier,
-    content: List<Content>
+    content: List<Content>,
+    onClick: (Content) -> Unit,
 ) {
     LazyColumn(
         modifier = modifier,
@@ -319,7 +337,7 @@ fun ContentList(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         items(content, key = { it.id }) {
-            PhotoCard(text = it.title)
+            PhotoCard(text = it.title, modifier = Modifier.clickable { onClick(it) })
         }
     }
 }
@@ -353,6 +371,7 @@ fun UnderConstruction(
 fun QueueScreen(
     modifier: Modifier = Modifier,
     contentRepo: ContentRepository,
+    onClick: (Content) -> Unit,
 ) {
     val content by contentRepo
         .getQueued()
@@ -362,6 +381,7 @@ fun QueueScreen(
     ContentList(
         content = content,
         modifier = modifier,
+        onClick = onClick
     )
 }
 

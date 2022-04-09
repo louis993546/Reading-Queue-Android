@@ -12,6 +12,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverter
+import androidx.room.TypeConverters
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -22,7 +24,23 @@ data class ContentEntity(
     @ColumnInfo(name = "is_favorite") val isFavorite: Boolean,
     @ColumnInfo(name = "is_queued") val isQueued: Boolean,
     @ColumnInfo(name = "read") val read: Boolean,
-)
+    @ColumnInfo(name = "origin") val origin: Origin,
+    @ColumnInfo(name = "origin_rss_feed_id") val originRssFeed: String?
+) {
+    enum class Origin {
+        RssFeed, ReadLater, Email
+    }
+}
+
+class ContentEntityOriginConverter {
+    @TypeConverter
+    fun fromEnum(origin: ContentEntity.Origin?): String? = origin?.name
+
+    @TypeConverter
+    fun toEnum(string: String?): ContentEntity.Origin? = string?.let {
+        ContentEntity.Origin.valueOf(it)
+    }
+}
 
 @Entity(tableName = "rss_feed")
 data class RssFeedEntity(
@@ -73,15 +91,26 @@ class ContentRepository(
 
     fun getFavorite(): Flow<List<Content>> = contentDao.getFavorites().map { it.toContentList() }
 
-    private fun List<ContentEntity>.toContentList(): List<Content> {
-        return this.map {
-            Content(
-                id = it.url,
-                title = it.url,
-                subtitle = "TODO also this needs to be nullable",
-            )
-        }
+    private fun List<ContentEntity>.toContentList(): List<Content> = this.map {
+        Content(
+            id = it.url,
+            title = it.url,
+            subtitle = "TODO also this needs to be nullable",
+        )
     }
+
+    suspend fun add(contents: List<Content>) {
+        contentDao.add(*contents.map { it.toContentEntity() }.toTypedArray())
+    }
+
+    private fun Content.toContentEntity(): ContentEntity = ContentEntity(
+        url = id,
+        isFavorite = false,
+        isQueued = false,
+        origin = ContentEntity.Origin.RssFeed,
+        originRssFeed = "",
+        read = false,
+    )
 }
 
 class RssFeedRepository(
@@ -105,7 +134,10 @@ private fun RssFeedEntity.toRssFeed() = RssFeed(
         ContentEntity::class,
         RssFeedEntity::class,
     ],
-    version = 4,
+    version = 5,
+)
+@TypeConverters(
+    ContentEntityOriginConverter::class
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun contentDao(): ContentDao
