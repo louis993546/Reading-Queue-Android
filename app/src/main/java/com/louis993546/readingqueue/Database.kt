@@ -1,5 +1,6 @@
 package com.louis993546.readingqueue
 
+import android.content.Context
 import androidx.room.ColumnInfo
 import androidx.room.Dao
 import androidx.room.Database
@@ -9,7 +10,9 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -18,6 +21,14 @@ data class ContentEntity(
     @PrimaryKey val url: String,
     @ColumnInfo(name = "is_favorite") val isFavorite: Boolean,
     @ColumnInfo(name = "is_queued") val isQueued: Boolean,
+    @ColumnInfo(name = "read") val read: Boolean,
+)
+
+@Entity(tableName = "rss_feed")
+data class RssFeedEntity(
+    @PrimaryKey val url: String,
+    @ColumnInfo(name = "name") val name: String,
+    @ColumnInfo(name = "icon_url") val iconUrl: String?,
 )
 
 @Dao
@@ -29,21 +40,38 @@ interface ContentDao {
     fun getFavorites(): Flow<List<ContentEntity>>
 
     @Query("SELECT * FROM content WHERE is_queued = 1")
-    fun getQueued(): List<ContentEntity>
+    fun getQueued(): Flow<List<ContentEntity>>
+
+    @Update
+    suspend fun update(vararg content: ContentEntity)
 
     @Insert(onConflict = OnConflictStrategy.IGNORE) // assume this is sth user has saved already
-    fun add(vararg content: ContentEntity)
+    suspend fun add(vararg content: ContentEntity)
 
     @Delete
-    fun remove(vararg content: ContentEntity)
+    suspend fun remove(vararg content: ContentEntity)
+}
+
+@Dao
+interface RssFeedDao {
+    @Query("SELECT * FROM rss_feed")
+    suspend fun getAll(): List<RssFeedEntity>
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun add(vararg rssFeeds: RssFeedEntity)
+
+    @Delete
+    suspend fun remove(vararg rssFeeds: RssFeedEntity)
 }
 
 class ContentRepository(
     private val contentDao: ContentDao,
 ) {
-    fun getAll(): Flow<List<Content>> {
-        return contentDao.getAll().map { it.toContentList() }
-    }
+    fun getAll(): Flow<List<Content>> = contentDao.getAll().map { it.toContentList() }
+
+    fun getQueued(): Flow<List<Content>> = contentDao.getQueued().map { it.toContentList() }
+
+    fun getFavorite(): Flow<List<Content>> = contentDao.getFavorites().map { it.toContentList() }
 
     private fun List<ContentEntity>.toContentList(): List<Content> {
         return this.map {
@@ -56,7 +84,38 @@ class ContentRepository(
     }
 }
 
-@Database(entities = [ContentEntity::class], version = 1)
+class RssFeedRepository(
+    private val rssFeedDao: RssFeedDao,
+) {
+    suspend fun getAll(): List<RssFeed> = rssFeedDao.getAll().map { it.toRssFeed() }
+}
+
+data class RssFeed(
+    val url: String,
+    val name: String,
+)
+
+private fun RssFeedEntity.toRssFeed() = RssFeed(
+    url = this.url,
+    name = this.name,
+)
+
+@Database(
+    entities = [
+        ContentEntity::class,
+        RssFeedEntity::class,
+    ],
+    version = 4,
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun contentDao(): ContentDao
+
+    abstract fun rssFeedDao(): RssFeedDao
 }
+
+fun getDatabase(appContext: Context): AppDatabase = Room.databaseBuilder(
+    appContext,
+    AppDatabase::class.java,
+    "reading-queue"
+).fallbackToDestructiveMigration() // TODO debug only
+    .build()

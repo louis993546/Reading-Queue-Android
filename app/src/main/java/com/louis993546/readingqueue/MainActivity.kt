@@ -4,6 +4,7 @@ package com.louis993546.readingqueue
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -46,9 +47,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -59,7 +62,11 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import androidx.room.Room
+import androidx.work.Constraints
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
 import coil.compose.AsyncImage
 import com.louis993546.readingqueue.ui.theme.ReadingQueueTheme
 import it.skrape.core.htmlDocument
@@ -71,22 +78,23 @@ import it.skrape.selects.html5.head
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import timber.log.Timber
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
-    val db: AppDatabase by lazy {
-        Room.databaseBuilder(
-            /* context = */ applicationContext,
-            /* klass = */ AppDatabase::class.java,
-            /* name = */ "reading-queue"
-        ).build()
+    private val db: AppDatabase by lazy { getDatabase(applicationContext) }
+
+    // TODO inject
+    private val contentRepo: ContentRepository by lazy {
+        ContentRepository(db.contentDao())
     }
 
-    val repo: ContentRepository by lazy {
-        ContentRepository(db.contentDao())
+    private val rssFeedRepo: RssFeedRepository by lazy {
+        RssFeedRepository(db.rssFeedDao())
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setupWorkManager()
         setContent {
             ReadingQueueTheme {
                 val navController = rememberNavController()
@@ -95,16 +103,12 @@ class MainActivity : ComponentActivity() {
 
                 val coroutineScope = rememberCoroutineScope()
 
-                val content by repo
-                    .getAll()
-                    .collectAsState(emptyList())
-
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     bottomBar = {
                         ReadingQueueBottomBarContainer(
-                            currentDestination,
-                            navController
+                            currentDestination = currentDestination,
+                            navController = navController
                         )
                     }
                 ) { paddingValues ->
@@ -114,16 +118,20 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.padding(paddingValues)
                     ) {
                         composable(Screen.FeedList.name) {
-                            FeedListScreen { navController.navigate(ReadingQueueTab.Feed.label) }
+                            FeedListScreen(rssFeedRepo = rssFeedRepo) {
+                                navController.navigate(ReadingQueueTab.Feed.label)
+                            }
                         }
                         composable(ReadingQueueTab.Feed.label) {
-                            FeedScreen(content = content) {
+                            FeedScreen(contentRepo = contentRepo) {
                                 coroutineScope.launch(Dispatchers.IO) {
                                     parse()
                                 }
                             }
                         }
-                        composable(ReadingQueueTab.Queue.label) { QueueScreen() }
+                        composable(ReadingQueueTab.Queue.label) {
+                            QueueScreen(contentRepo = contentRepo)
+                        }
                         composable(ReadingQueueTab.Search.label) { SearchScreen() }
                         composable(ReadingQueueTab.Favorite.label) { FavoriteScreen() }
                         composable(ReadingQueueTab.Settings.label) { SettingsScreen() }
@@ -134,6 +142,24 @@ class MainActivity : ComponentActivity() {
                     navController.navigate(ReadingQueueTab.Feed.label)
                 }
             }
+        }
+    }
+
+    private fun setupWorkManager() {
+        val work = PeriodicWorkRequestBuilder<FetchRssWorker>(
+            repeatInterval = 15L,
+            repeatIntervalTimeUnit = TimeUnit.MINUTES,
+        ).setConstraints(
+            Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+        ).build()
+        WorkManager.getInstance(applicationContext).run {
+            enqueueUniquePeriodicWork(
+                /* uniqueWorkName = */ "fetch-rss",
+                /* existingPeriodicWorkPolicy = */ ExistingPeriodicWorkPolicy.REPLACE,
+                /* periodicWork = */ work
+            )
         }
     }
 
@@ -211,28 +237,48 @@ fun SearchScreen(
                 .padding(16.dp),
             shape = MaterialTheme.shapes.large,
         )
+        UnderConstruction(modifier = Modifier.weight(1f))
     }
+}
+
+sealed class FeedListScreenState {
+    object Loading: FeedListScreenState()
+    data class Loaded(val feeds: List<RssFeed>): FeedListScreenState()
 }
 
 @Composable
 fun FeedListScreen(
     modifier: Modifier = Modifier,
+    rssFeedRepo: RssFeedRepository,
     onClick: (String) -> Unit,
 ) {
-    Column(modifier = modifier) {
-        Text("Feed 1", modifier = Modifier.clickable { onClick("feed 1") })
-        Text("Feed 2", modifier = Modifier.clickable { onClick("feed 2") })
-        Text("Feed 3", modifier = Modifier.clickable { onClick("feed 3") })
-        Text("Feed 4", modifier = Modifier.clickable { onClick("feed 4") })
+    var state by remember { mutableStateOf<FeedListScreenState>(FeedListScreenState.Loading) }
+
+    LaunchedEffect(key1 = Unit) {
+        val data = rssFeedRepo.getAll()
+        state = FeedListScreenState.Loaded(data)
+    }
+
+    when (state) {
+        FeedListScreenState.Loading -> Text("loading", modifier = modifier)
+        is FeedListScreenState.Loaded -> LazyColumn(modifier = modifier) {
+            items((state as FeedListScreenState.Loaded).feeds, key = { it.url }) {
+                Text(it.name, modifier = Modifier.clickable { onClick(it.url) })
+            }
+        }
     }
 }
 
 @Composable
 fun FeedScreen(
     modifier: Modifier = Modifier,
-    content: List<Content>,
+    contentRepo: ContentRepository,
     onClick: () -> Unit,
 ) {
+    val content by contentRepo
+        .getAll()
+        .collectAsState(emptyList())
+
     Column(modifier = modifier) {
         var showMenu by remember { mutableStateOf(false) }
 
@@ -258,32 +304,24 @@ fun FeedScreen(
                 }
             },
         )
-        LazyColumn(
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-//            content.forEach {
-//                PhotoCard(it)
-//            }
-            items(content, key = { it.id }) {
-                PhotoCard(text = it.title)
-            }
-        }
+        ContentList(content = content)
     }
 }
 
-// TODO see if it makes more sense to have separate list
 @Composable
 fun ContentList(
-    modifier: Modifier,
-    displayMode: DisplayMode,
-    content: List<Content>,
+    modifier: Modifier = Modifier,
+    content: List<Content>
 ) {
-
-}
-
-enum class DisplayMode {
-    PhotoCard
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        items(content, key = { it.id }) {
+            PhotoCard(text = it.title)
+        }
+    }
 }
 
 data class Content(
@@ -298,24 +336,47 @@ data class Content(
 )
 
 @Composable
-fun QueueScreen(
+fun UnderConstruction(
     modifier: Modifier = Modifier,
 ) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .border(4.dp, Color.Red),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("Under construction")
+    }
+}
 
+@Composable
+fun QueueScreen(
+    modifier: Modifier = Modifier,
+    contentRepo: ContentRepository,
+) {
+    val content by contentRepo
+        .getQueued()
+        .collectAsState(initial = emptyList())
+
+    // TODO top bar, FAB, etc
+    ContentList(
+        content = content,
+        modifier = modifier,
+    )
 }
 
 @Composable
 fun FavoriteScreen(
     modifier: Modifier = Modifier,
 ) {
-
+    UnderConstruction(modifier = modifier)
 }
 
 @Composable
 fun SettingsScreen(
     modifier: Modifier = Modifier,
 ) {
-
+    UnderConstruction(modifier = modifier)
 }
 
 /**
@@ -371,7 +432,7 @@ fun ReadingQueueBottomBar(
     BottomNavigation(
         modifier = modifier,
     ) {
-        ReadingQueueTab.values().forEachIndexed { index, tab ->
+        ReadingQueueTab.values().forEach { tab ->
             BottomNavigationItem(
                 icon = {
                     Icon(
